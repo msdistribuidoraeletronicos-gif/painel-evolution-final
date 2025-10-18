@@ -1,0 +1,7 @@
+# supabase/functions/create-user-with-config/config.toml
+
+# Configura o Edge Function para não exigir um JWT
+# Isso é obrigatório para funções de cadastro (Sign Up) e Webhooks
+[functions]
+  [functions.create-user-with-config]
+    verify_jwt = false
