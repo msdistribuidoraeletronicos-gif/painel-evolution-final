@@ -1,4 +1,6 @@
 // src/AuthPage.jsx
+// CÓDIGO CORRIGIDO E COMPLETO
+
 import React, { useState } from 'react';
 import { supabase } from './supabaseClient';
 import styles from './AuthPage.module.css';
@@ -7,62 +9,71 @@ export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  // NOVOS ESTADOS PARA O CADASTRO
+  // CAMPOS OBRIGATÓRIOS
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  
-  // URL da Edge Function para criar usuário (chamada apenas no cadastro)
-  const CREATE_USER_FUNCTION_URL = 'https://gwnztmmmazcxoygnkfhp.supabase.co/functions/v1/create-user-with-config'; 
 
+  // --- FUNÇÃO CORRIGIDA ---
   const handleAuthAction = async (event) => {
     event.preventDefault();
     setLoading(true);
     setError(null);
 
+    // VALIDAÇÃO FRONTEND
+    if (!isLogin && (!fullName || !phoneNumber)) {
+        setError("Nome completo e telefone são obrigatórios para o cadastro.");
+        setLoading(false);
+        return;
+    }
+
     try {
       if (isLogin) {
-        // Lógica de Login Padrão
+        // LÓGICA DE LOGIN (NÃO MUDA, JÁ ESTAVA CORRETA)
         const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
         if (loginError) throw loginError;
 
       } else {
-        // LÓGICA DE CADASTRO (CHAMADA À EDGE FUNCTION)
-        const response = await fetch(CREATE_USER_FUNCTION_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                // O n8n requer autenticação, mas a Edge Function não, a menos que você a proteja.
-                // Não é necessário passar a chave secreta aqui.
-            },
-            body: JSON.stringify({
-                email: email,
-                password: password,
-                full_name: fullName,
-                numero: phoneNumber, 
-            }),
+        
+        // >>>>>>>> CORREÇÃO AQUI <<<<<<<<<<
+        // Paramos de usar 'auth.signUp' e passamos a invocar
+        // a sua Edge Function 'create-user-with-config' diretamente,
+        // pois é assim que seu painel admin (que funciona) faz.
+        
+        // Usamos o 'supabase.functions.invoke' que é a forma moderna
+        // de chamar a função. O nome da função é o nome do arquivo dela.
+        const { data, error: functionError } = await supabase.functions.invoke('create-user-with-config', {
+          body: {
+            email: email,
+            password: password,
+            // Enviamos os nomes que a sua função espera:
+            full_name: fullName, 
+            numero: phoneNumber
+          }
         });
 
-        const result = await response.json();
-        
-        if (!response.ok) {
-            // Se a função falhar (status 400 ou 500)
-            const errorMessage = result.error || 'Erro desconhecido ao criar usuário.';
-            throw new Error(errorMessage);
+        if (functionError) {
+          // Se a função retornar um erro (ex: "User already registered"),
+          // ele será capturado aqui.
+          throw functionError;
         }
-
-        alert(result.message || 'Cadastro realizado! Onboarding iniciado.');
-        setIsLogin(true); // Redireciona para o login após o cadastro
+        
+        // Se a função foi executada com sucesso:
+        alert('Usuário criado com sucesso! Por favor, faça login.');
+        setIsLogin(true); // Redireciona para o login
+        // >>>>>>>> FIM DA CORREÇÃO <<<<<<<<<<
       }
 
     } catch (error) {
-      setError(error.message);
+      // Captura erros tanto do login quanto da Edge Function
+      setError(error.message || "Ocorreu um erro. Verifique os dados e tente novamente.");
     } finally {
       setLoading(false);
     }
   };
+  // --- FIM DA FUNÇÃO CORRIGIDA ---
 
   return (
     <div className={styles.authContainer}>
@@ -99,6 +110,7 @@ export default function AuthPage() {
             <input id="password" type="password" placeholder="••••••••" value={password} required onChange={(e) => setPassword(e.target.value)} />
           </div>
 
+          {/* O erro (string) será renderizado aqui */}
           {error && <p className={styles.errorMessage}>{error}</p>}
 
           <button type="submit" className={styles.authButton} disabled={loading}>

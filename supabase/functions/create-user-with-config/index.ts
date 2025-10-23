@@ -1,4 +1,5 @@
 // supabase/functions/create-user-with-config/index.ts
+// CORRIGIDO para salvar o 'user_id' (UUID) e o 'role'
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.44.0';
@@ -7,100 +8,82 @@ const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
-const N8N_WEBHOOK_URL = Deno.env.get('N8N_WEBHOOK_URL');
-if (!N8N_WEBHOOK_URL) {
-    console.error("ERRO CRÍTICO: Variável de ambiente N8N_WEBHOOK_URL não configurada.");
-}
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': 'http://localhost:5173', 
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
 
 serve(async (req) => {
+
+    if (req.method === 'OPTIONS') {
+      return new Response('ok', { headers: corsHeaders });
+    }
+
     try {
         const body = await req.json();
-        // A Edge Function agora espera todos os campos do formulário de cadastro
         const { email, password, full_name, numero } = body; 
 
         if (!email || !password || !full_name || !numero) {
-            return new Response(JSON.stringify({ error: 'Todos os campos obrigatórios (Email, Senha, Nome e Telefone) devem ser preenchidos.' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' },
-            });
+            return new Response(JSON.stringify({ error: 'Todos os campos são obrigatórios.' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
         }
-
-        // PASSO 1: CRIAÇÃO DO USUÁRIO NA AUTENTICAÇÃO
+        
+        // --- ETAPA 1: CRIAR O USUÁRIO DE AUTENTICAÇÃO ---
+        console.log(`Iniciando criação de usuário de autenticação para: ${email}`);
+        
         const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-            email,
-            password,
+            email: email,
+            password: password,
             email_confirm: true,
+            user_metadata: {
+                full_name: full_name,
+                numero: numero
+            }
         });
 
         if (authError) {
-            console.error("ERRO AO CRIAR USUÁRIO:", authError.message);
-            throw new Error(`Falha na autenticação ao criar usuário: ${authError.message}`);
+            console.error("ERRO AO CRIAR USUÁRIO DE AUTENTICAÇÃO:", authError.message);
+            throw new Error(`Erro ao criar usuário (Etapa 1): ${authError.message}`);
         }
 
-        const newUser = authData.user;
+        const newUserId = authData.user.id; // <-- Este é o UUID que precisamos
+        console.log(`Usuário de autenticação criado com sucesso. ID: ${newUserId}`);
 
-        // PASSO 2: CRIAÇÃO DO PERFIL NA TABELA 'profiles'
-        const profileData = {
-            id: newUser.id,
-            role: 'user',
-            full_name: full_name,
-            numero: numero, // <<< VALOR RECEBIDO DO FORMULÁRIO
-            
-            // CAMPOS OBRIGATÓRIOS RESTANTES
-            created_at: new Date().toISOString(), 
-            updated_at: new Date().toISOString(), 
-            avatar_url: '', 
-        };
 
-        const { error: profileError } = await supabaseAdmin.from('profiles').insert(profileData);
+        // --- ETAPA 2: INSERIR NA TABELA 'teste_escrita_usuarios' ---
+        console.log("Iniciando inserção em 'teste_escrita_usuarios'...");
+        
+        // >>>>>>>> CORREÇÃO AQUI <<<<<<<<<<
+        const { data: insertedData, error: insertError } = await supabaseAdmin
+          .from('teste_escrita_usuarios') 
+          .insert({
+            user_id: newUserId,       // <-- SALVA O UUID DO LOGIN
+            nome_completo: full_name,
+            numero_telefone: numero,
+            email_usuario: email,
+            role: 'user'              // <-- DEFINE O CARGO PADRÃO
+          })
+          .select() 
+          .single(); 
+        // >>>>>>>> FIM DA CORREÇÃO <<<<<<<<<<
 
-        if (profileError) {
-            console.error("ERRO CRÍTICO AO CRIAR PERFIL:", profileError.message);
-            throw new Error(`Falha no DB ao criar perfil. (Detalhes: ${profileError.code} - ${profileError.message})`);
+        if (insertError) {
+            console.error("ERRO AO INSERIR EM 'teste_escrita_usuarios':", insertError.message);
+            throw new Error(`Erro ao escrever no banco (Etapa 2): ${insertError.message}`);
         }
+        
+        console.log("Inserção em 'teste_escrita_usuarios' bem-sucedida. ID:", insertedData?.id);
 
-        // PASSO 3: DISPARAR WEBHOOK PARA O N8N
-        if (N8N_WEBHOOK_URL) {
-            const webhookPayload = {
-                user_id: newUser.id,
-                user_email: newUser.email,
-                instance_name: full_name,
-                user_name: full_name,
-            };
 
-            await fetch(N8N_WEBHOOK_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(webhookPayload),
-            });
-        }
-
-        return new Response(JSON.stringify({ message: `Usuário ${email} criado e onboarding iniciado no n8n!` }), {
+        // --- SUCESSO ---
+        return new Response(JSON.stringify({ message: `Usuário ${email} criado com sucesso!` }), {
             status: 200,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
 
-    } catch (error) {
-        // TRATAMENTO DE ERRO: Garante que o usuário de autenticação seja deletado se o perfil falhar
-        let userIdToDelete = null;
-        try {
-            const authHeader = error.message.match(/user ID: ([a-f0-9-]+)/i)?.[1];
-            if (authHeader) userIdToDelete = authHeader;
-        } catch (e) { /* ignore */ }
-
-        if (userIdToDelete) {
-            try {
-                await supabaseAdmin.auth.admin.deleteUser(userIdToDelete);
-            } catch (cleanupError) {
-                console.error("Falha na limpeza do usuário Auth após erro:", cleanupError.message);
-            }
-        }
-        
-        console.error('Falha geral na Edge Function:', error.message);
-        
-        return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
+    } catch (generalError) {
+        console.error('ERRO INESPERADO NA FUNÇÃO:', generalError.message);
+        return new Response(JSON.stringify({ error: generalError.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
     }
 });

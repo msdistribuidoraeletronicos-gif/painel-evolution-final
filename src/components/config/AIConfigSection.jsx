@@ -1,6 +1,7 @@
 import React from "react";
 import { Brain } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input"; // Importar Input
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ConfigCard from "./ConfigCard";
 import ConfigField from "./ConfigField";
@@ -13,6 +14,20 @@ export default function AIConfigSection({ config, setConfig }) {
       description="Defina a personalidade e o modelo de IA do seu chatbot"
       iconColor="text-purple-600"
     >
+      
+      {/* ===== NOVO CAMPO: NOME DO AGENTE (Input) ===== */}
+      <ConfigField
+        label="Nome do Agente"
+        description="O nome que o chatbot usará para se identificar. Útil para ser referenciado no Prompt."
+      >
+        <Input
+          value={config.nome_agente || ''}
+          onChange={(e) => setConfig({ ...config, nome_agente: e.target.value })}
+          placeholder="Ex: 'Assistente MS Distribuidora'"
+        />
+      </ConfigField>
+      {/* =========================================== */}
+      
       <ConfigField
         label="Prompt do Agente"
         description="Este é o 'cérebro' do chatbot. Defina aqui a persona, tom de voz, fluxo de conversa, informações sobre produtos/serviços e regras de negócio."
