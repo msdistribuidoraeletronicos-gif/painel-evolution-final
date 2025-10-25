@@ -57,7 +57,7 @@ export default function EvolutionConfigSection() {
 
     // Para de tentar após 30 segundos
     setTimeout(() => {
-      if (pollingIntervalRef.current) {
+      if ( pollingIntervalRef.current ) {
         stopPolling();
         setLoading(false);
         setError("Não foi possível obter o QR Code. Tente atualizar.");
@@ -73,13 +73,71 @@ export default function EvolutionConfigSection() {
     stopPolling(); // Para qualquer polling ao checar o status
     try {
       setError(null);
+      setQrCode(null); // Limpa o QR antigo antes de checar
+      
+      // =================================================================
+      // ✅ CORREÇÃO 1: Validar nome vazio
+      // =================================================================
+      if (!instanceName) {
+        setError("Por favor, informe o Nome da Instância.");
+        setStatus({ status: "nao_encontrada" });
+        setLoading(false);
+        return;
+      }
+      
+      // 1. Busca a instância pelo NOME
+      // A 'result' agora será: { status: "...", number: "...", qrCode: "..." }
       const result = await getInstanceStatus(instanceName);
+      
+      // =================================================================
+      // ✅ CORREÇÃO 2: Lógica "E" (Nome E Número) Correta
+      // =================================================================
+      const apiNumber = result?.number;
+      const userNumber = whatsappNumber; // Número que o usuário digitou
+
+      // Limpa os números para comparar (remove '+', ' ', etc.)
+      const cleanApiNum = apiNumber ? String(apiNumber).replace(/\D/g, '') : null;
+      const cleanUserNum = userNumber ? String(userNumber).replace(/\D/g, '') : null;
+
+      // 2. Validação:
+      // SE a API tem um número registrado (cleanApiNum não é nulo)
+      // E o número do usuário (cleanUserNum) é DIFERENTE do da API...
+      // (Isso inclui o caso do usuário deixar o campo em branco (cleanUserNum = null))
+      if (cleanApiNum && cleanUserNum !== cleanApiNum) {
+          
+          // ... então é um erro de "número incorreto".
+          // (Ex: 'painel' (API: ...9842) e usuário digita NADA (null))
+          setError(
+            `Instância "${instanceName}" encontrada, mas o número não corresponde. (API: ...${cleanApiNum.slice(-4)} | Digitado: ${cleanUserNum ? '...'+cleanUserNum.slice(-4) : 'Nenhum'})`
+          );
+          setStatus({ status: "numero_incorreto" });
+          setLoading(false);
+          return; // Para a execução
+      }
+      
+      // Se a API NÃO tem número (cleanApiNum é null, ex: 'bot_principal' desconectada),
+      // a validação é PULADA, e o sistema tenta conectar com o número
+      // que o usuário digitou. (Corrigindo o problema da 'bot_principal')
+      // =================================================================
+      // FIM DA VALIDAÇÃO
+      // =================================================================
+
+      // 3. Se chegou aqui, está tudo certo. Seta o status.
       setStatus(result);
 
-      if (result?.status === "open") {
+      // 4. Se a API já retornou o QR Code, apenas exiba-o.
+      if (result.qrCode) {
+        setQrCode(result.qrCode);
+        setLoading(false); // Paramos aqui, não precisamos de polling
+      } 
+      // 5. Se a API disse que está 'open', limpa o QR.
+      else if (result.status === "open") {
         setQrCode(null); // Conectado, limpa QR
-      } else {
-        // Se não está aberta ("close", "connecting", etc), tenta pegar o QR
+        setLoading(false);
+      } 
+      // 6. Se está em qualquer outro estado ('connecting', 'close', etc.)
+      //    E NÃO temos um QR, aí sim iniciamos o polling.
+      else {
         startPollingQrCode();
       }
     } catch (err) {
@@ -87,10 +145,9 @@ export default function EvolutionConfigSection() {
         setError(`Instância "${instanceName}" não encontrada. Clique em 'Criar'.`);
         setStatus({ status: "nao_encontrada" });
       } else {
-        setError("Erro ao verificar status da instância");
+        setError(`Erro ao verificar status: ${err.message}`);
       }
-    } finally {
-      setLoading(false);
+      setLoading(false); // Garante que o loading pare em caso de erro
     }
   };
 
@@ -101,8 +158,19 @@ export default function EvolutionConfigSection() {
     setError(null);
     setQrCode(null);
 
+    // =================================================================
+    // ✅ CORREÇÃO 3: Validar antes de Criar
+    // =================================================================
+    if (!instanceName || !whatsappNumber) {
+        setError("Para criar, o Nome da Instância e o Número são obrigatórios.");
+        setLoading(false);
+        return;
+    }
+
     try {
+      // A função createInstance já envia o NOME e o NÚMERO
       await createInstance(instanceName, whatsappNumber);
+      
       // Após criar, inicia o polling para buscar o QR Code
       startPollingQrCode();
 
@@ -113,7 +181,7 @@ export default function EvolutionConfigSection() {
         err.message?.includes("is already in use")
       ) {
         setError("Essa instância já existe. Buscando QR Code para reconectar...");
-        startPollingQrCode(); // Se já existe, só busca o QR
+        startPollingQrCode(); 
       } else {
         console.error("Erro ao criar instância:", err);
         setError(err.message || "Erro desconhecido ao criar instância");
@@ -125,12 +193,15 @@ export default function EvolutionConfigSection() {
 
   // Limpa o polling ao sair da tela
   useEffect(() => {
-    handleCheckStatus(); // Verifica status ao carregar
+    // Não vamos mais checar o status ao carregar,
+    // pois os campos podem estar vazios ou com dados
+    // de outra instância.
+    // handleCheckStatus(); // REMOVIDO
     
     return () => {
       stopPolling(); // Limpa o timer
     };
-  }, []);
+  }, []); // Dependência vazia: roda apenas 1x ao montar
 
   return (
     <div className="p-6 rounded-2xl shadow-md bg-white max-w-xl mx-auto mt-8 border border-gray-200">
@@ -138,7 +209,7 @@ export default function EvolutionConfigSection() {
         ⚡ Conexão Evolution API
       </h2>
       <p className="text-gray-600 mb-6">
-        Gerencia a instância: <strong>{instanceName}</strong>
+        Gerencia a instância: <strong>{instanceName || "N/A"}</strong>
       </p>
 
       <div className="space-y-4">
@@ -168,7 +239,7 @@ export default function EvolutionConfigSection() {
         </div>
 
         {error && (
-          <div className="p-3 rounded-lg bg-red-100 border border-red-300 text-red-700">
+          <div className="p-3 rounded-lg bg-red-100 border-red-300 text-red-700">
             {error}
           </div>
         )}
@@ -178,12 +249,14 @@ export default function EvolutionConfigSection() {
             className={`p-3 rounded-lg border ${
               status?.status === "open"
                 ? "bg-green-100 border-green-300 text-green-700"
-                : "bg-yellow-100 border-yellow-300 text-yellow-700"
+                : (status?.status === "nao_encontrada" || status?.status === "timeout" || status?.status === "numero_incorreto" || status?.status === "dados_incompletos")
+                  ? "bg-red-100 border-red-300 text-red-700" // Erros em vermelho
+                   : "bg-yellow-100 border-yellow-300 text-yellow-700" // Pendências em amarelo
             }`}
           >
             {status?.status === "open"
               ? "✅ Instância conectada com sucesso!"
-              : "📡 Status: " + (status?.status || status)}
+              : `📡 Status: ${status?.status || String(status)}`}
           </div>
         )}
 
